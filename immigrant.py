@@ -1,21 +1,26 @@
 #!/usr/bin/env python
 
 """
-Nordea to OFX: converts Nordea transaction lists (CSV) to OFX for use with
-financial management software.
+Immigrant is a small script forked from Nordea to OFX by jgoney
+(https://github.com/jgoney/Nordea-to-OFX)
 
-TODO: Allow support for other languages (Finnish and Swedish)
-TODO: Confirm that this works with files from all Nordea countries
-      (tested with Finnish version)
+It converts OCBC transaction lists (that are in some silly CSV format) to OFX,
+for use with modern financial management software
+
+"Immigrant" is a play on the name, Overseas Chinese Bank. 
+
+Immigrant: converts OCBC transaction lists (CSV) to OFX for use with
+financial management software.
 """
 
 import csv
 import os
 import sys
 import time
+import re
 
 # Here you can define the currency used with your account (e.g. EUR, SEK)
-MY_CURRENCY = "EUR"
+MY_CURRENCY = "SGD"
 
 
 def getTransType(trans, amt):
@@ -70,12 +75,15 @@ def convertFile(f):
 
     # Create csv reader and read in account number
     csvReader = csv.reader(f, dialect=csv.excel_tab)
-    acctNumber = csvReader.next()[1]
+    acctDetailsFor_line1 = csvReader.next() # TODO: what is this line for?
+    acctDetailsFor_line2 = csvReader.next()[0] # TODO: verify that this is the line with the acct number
+    acctNumber = "".join(re.findall(r"\d{3}-\d{6}-\d{3}", acctDetailsFor_line2)) # Converted to string
 
     # Get info from file name about dates (time is not given, so we add 12:00
     # as arbitrary time)
 
     # TODO: parsing this with a REGEX would be less fragile
+    # TODO: make the parsing of the dates automatic
     try:
         dateStart = f.name.split('_')[2] + "120000"
         dateEnd = f.name.split('_')[3].split('.')[0] + "120000"
@@ -86,8 +94,8 @@ def convertFile(f):
         dateEnd = raw_input("Please enter an end date: ") + "12000"
 
     # Bypasses unneeded lines
-    while csvReader.line_num < 4:
-        csvReader.next()
+    while csvReader.line_num < 7:
+        unnecessary_line = csvReader.next()
 
     # Creates string from file's time stamp
     timeStamp = time.strftime(
@@ -99,13 +107,13 @@ def convertFile(f):
         '''<?xml version="1.0" encoding="ANSI" standalone="no"?>
 <?OFX OFXHEADER="200" VERSION="200" SECURITY="NONE" OLDFILEUID="NONE" NEWFILEUID="NONE"?>
 <OFX>
-        <SIGNONMSGSRSV1>
-                <SONRS>
-                        <STATUS>
+    <SIGNONMSGSRSV1>
+            <SONRS>
+                                    <STATUS>
                                 <CODE>0</CODE>
                                 <SEVERITY>INFO</SEVERITY>
                         </STATUS>
-                        <DTSERVER>''' + timeStamp + '''</DTSERVER>
+                        <DTSERVER>''' + timeStamp +  '''</DTSERVER>
                         <LANGUAGE>ENG</LANGUAGE>
                 </SONRS>
         </SIGNONMSGSRSV1>
@@ -124,9 +132,7 @@ def convertFile(f):
                     <ACCTTYPE>CHECKING</ACCTTYPE>
                 </BANKACCTFROM>
                 <BANKTRANLIST>
-                    <DTSTART>''' + dateStart + '''</DTSTART>
-                    <DTEND>''' + dateEnd + '''</DTEND>
-                    ''')
+                    <DTSTART>''')
 
     # Read lines from csvReader and add them as transactions
     for line in csvReader:
