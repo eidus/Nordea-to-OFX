@@ -18,9 +18,15 @@ import os
 import sys
 import time
 import re
+from datetime import *
+import time
 
 # Here you can define the currency used with your account (e.g. EUR, SEK)
 MY_CURRENCY = "SGD"
+
+# ============= CONSTANTS ================
+# Row number where the Field Names (e.g. transaction date, value date etc) are at (necessary for CSV Dictreader to know!)
+FIELDNAMES_LINE_NUMBER = 6  
 
 
 def getTransType(trans, amt):
@@ -56,6 +62,11 @@ def getTransType(trans, amt):
         else:
             return "CREDIT"
 
+def getTransAmount(deposits, withdrawals):
+    if withdrawals: 
+        return "-" + withdrawals
+    else:
+        return deposits
 
 def convertFile(f):
     """
@@ -68,52 +79,61 @@ def convertFile(f):
 
     # Open/create the .ofx file
     try:
-        outFile = open(arg.split('.')[0] + ".ofx", "w")
+        outFile = open("output.ofx", "w")
     except IOError:
         print("Output file couldn't be created. Program will now exit")
         sys.exit(2)
 
-    # Create csv reader and read in account number
+    # Reads in the account number
     csvReader = csv.reader(f, dialect=csv.excel_tab)
-    acctDetailsFor_line1 = csvReader.next() # TODO: what is this line for?
-    acctDetailsFor_line2 = csvReader.next()[0] # TODO: verify that this is the line with the acct number
-    acctNumber = "".join(re.findall(r"\d{3}-\d{6}-\d{3}", acctDetailsFor_line2)) # Converted to string
+    acctDetails = csvReader.next()[0] # TODO: verify that this is the line with the acct number
+    acctNumber = "".join(re.findall(r"\d{3}-\d{6}-\d{3}", acctDetails)) # Converted to string
+    print "Account Number: " + acctNumber
 
-    # Get info from file name about dates (time is not given, so we add 12:00
-    # as arbitrary time)
+    # SKIPS THE FIRST FEW LINES
+    # see http://stackoverflow.com/questions/7588426/how-to-skip-pre-header-lines-with-csv-dictreader
+    f.seek(0)
+    for i in range(0,FIELDNAMES_LINE_NUMBER-1):    # TODO: pass "5" in as a paramter (in constants) in case OCBC changes its format
+        next(f)
+    csv_dictReader = csv.DictReader(f)
 
-    # TODO: parsing this with a REGEX would be less fragile
-    # TODO: make the parsing of the dates automatic
-    try:
-        dateStart = f.name.split('_')[2] + "120000"
-        dateEnd = f.name.split('_')[3].split('.')[0] + "120000"
-    except IndexError:
-        print "Unable to automatically retrieve the start/end dates for your file."
-        print "Please enter the start/end dates in the following format: YYYYMMDD (8 digits)."
-        dateStart = raw_input("Please enter a start date: ") + "12000"
-        dateEnd = raw_input("Please enter an end date: ") + "12000"
+    # Reads csv transactions into list
+    transactionEntries = []
+    for line in csv_dictReader:
+        print line
+        transactionEntries.append(line)
 
-    # Bypasses unneeded lines
-    while csvReader.line_num < 7:
-        unnecessary_line = csvReader.next()
+    # Simple test
+    numEntries = 0
+
+    # Gets the start and end dates
+    startDate = datetime.now()
+    endDate = datetime.min
+    for entry in transactionEntries:
+        if entry['Transaction date']:
+            entryDate = datetime.strptime(entry['Transaction date'], "%d/%m/%Y")
+            if entryDate < startDate: startDate = entryDate
+            if entryDate > endDate: endDate = entryDate
+            numEntries += 1
+    startDateString = startDate.strftime('%Y%m%d')   # Arbitrary time of 000000 assigned for each start date/end date
+    endDateString =  endDate.strftime('%Y%m%d')
 
     # Creates string from file's time stamp
     timeStamp = time.strftime(
         "%Y%m%d%H%M%S", time.localtime((os.path.getctime(f.name))))
-    # Version with timezone: timeStamp = time.strftime("%Y%m%d%H%M%S" + "[+2:%Z]", time.localtime())
 
     # Write header to file (includes timestamp)
     outFile.write(
         '''<?xml version="1.0" encoding="ANSI" standalone="no"?>
 <?OFX OFXHEADER="200" VERSION="200" SECURITY="NONE" OLDFILEUID="NONE" NEWFILEUID="NONE"?>
 <OFX>
-    <SIGNONMSGSRSV1>
-            <SONRS>
-                                    <STATUS>
+        <SIGNONMSGSRSV1>
+                <SONRS>
+                        <STATUS>
                                 <CODE>0</CODE>
                                 <SEVERITY>INFO</SEVERITY>
                         </STATUS>
-                        <DTSERVER>''' + timeStamp +  '''</DTSERVER>
+                        <DTSERVER>''' + timeStamp + '''</DTSERVER>
                         <LANGUAGE>ENG</LANGUAGE>
                 </SONRS>
         </SIGNONMSGSRSV1>
@@ -132,32 +152,45 @@ def convertFile(f):
                     <ACCTTYPE>CHECKING</ACCTTYPE>
                 </BANKACCTFROM>
                 <BANKTRANLIST>
-                    <DTSTART>''')
-
-    # Read lines from csvReader and add them as transactions
-    for line in csvReader:
-        if line != []:
-            # Unpacks the line into variables (including one null cell). Reformats the date.
-            entryDate, valueDate, paymentDate, amount, name, account, bic,\
-            transaction, refNum, refOrigNum, message, cardNum,\
-            receipt, nullCell = line
-
-            entryDate = entryDate.split('.')[2] + entryDate.split(
-                '.')[1] + entryDate.split('.')[0] + "120000"
-
-            # Quick and dirty trans type (needs a function table)
-            outFile.write(
-                '''<STMTTRN>
-                        <TRNTYPE>''' + getTransType(transaction, amount) + '''</TRNTYPE>
-                        <DTPOSTED>''' + entryDate + '''</DTPOSTED>
-                        <TRNAMT>''' + amount + '''</TRNAMT>
-                        <FITID>''' + refNum + '''</FITID>
-                        <NAME>''' + name + '''</NAME>
-                        <MEMO>''' + message + '''</MEMO>
-                    </STMTTRN>
+                    <DTSTART>''' + startDateString + '''</DTSTART>
+                    <DTEND>''' + endDateString + '''</DTEND>
                     ''')
 
-    # Write OFX footer
+    numTransactions = 0
+    while len(transactionEntries):
+        numTransactions += 1
+        currentTransaction = transactionEntries.pop(0)
+        
+        while len(transactionEntries):
+            if transactionEntries[0]['Transaction date']: break
+            additionalDescription = transactionEntries.pop(0)['Description']
+            currentTransaction['Description'] += " " + additionalDescription
+
+        # Just adds a default time of 000000 to each of the transactions
+        dateVector = currentTransaction['Transaction date'].split('/')
+        print dateVector
+        if len(dateVector[1]) < 2: dateVector[1] = '0' + dateVector[1]
+        if len(dateVector[0]) < 2: dateVector[0] = '0' + dateVector[0]
+        entryDate = dateVector[2] + dateVector[1] + dateVector[0]
+        print entryDate
+        entryAmount = getTransAmount(currentTransaction['Deposits (SGD)'], currentTransaction['Withdrawals (SGD)'])
+        # print currentTransaction
+
+        # Quick and dirty trans type (needs a function table)
+        outFile.write(
+                '''<STMTTRN>
+                        <TRNTYPE>''' + "getTransType(transaction, amount)" + '''</TRNTYPE>
+                        <DTPOSTED>''' + entryDate + '''</DTPOSTED>
+                        <TRNAMT>''' + entryAmount + '''</TRNAMT>
+                        <FITID>''' + 'refNum' + '''</FITID>
+                        <NAME>''''''</NAME>
+                        <MEMO>''' + currentTransaction['Description'] + '''</MEMO>
+                    </STMTTRN>
+                    ''')
+        
+    print "Num Transactions: " + str(numTransactions)
+    print "Num Entries: " + str(numEntries)
+    
     outFile.write(
         '''</BANKTRANLIST>
                         </STMTRS>
@@ -176,7 +209,7 @@ if __name__ == '__main__':
     # Open the files and put the handles in a list
     for arg in (sys.argv[1:]):
         try:
-            f_in = open(arg, "rb")
+            f_in = open(arg, "rU")
             print("Opening %s" % arg)
             convertFile(f_in)
         except IOError:
